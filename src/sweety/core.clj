@@ -1,6 +1,7 @@
 (ns sweety.core
   (:refer-clojure :exclude [list assoc!])
   (:use [clojure.string :only [capitalize split join lower-case]]
+        [clojure.walk :only [macroexpand-all]]
         [sweety.constants :only [de-camel events constants]])
   (:import (org.eclipse.swt SWT)
            (org.eclipse.swt.graphics Color)
@@ -9,6 +10,7 @@
                                    FillLayout FillData
                                    FormLayout FormData FormAttachment)
            (org.eclipse.swt.widgets Listener)))
+
 
 ;;; defwidget ------------------------------------------------------------------
 
@@ -61,8 +63,11 @@
       (and (symbol? sym) (= \. (first (str sym)))))
     false))
 
-(defn args-for-defwidget [[maybe-init :as more]]
-  (let [[init more] (if (set? maybe-init)
+(defn args-for-defwidget [[maybe-name :as more]]
+  (let [[name [maybe-init :as more]] (if (symbol? maybe-name)
+                                       [maybe-name (rest more)]
+                                       [nil more])
+        [init more] (if (set? maybe-init)
                       [maybe-init (rest more)]
                       [#{} more])
         [methods more] (split-with (every-pred list? method-call?)
@@ -70,7 +75,7 @@
         [keys+vals children] (map (partial apply concat)
                                   (split-with (comp keyword? first)
                                               (partition-all 2 more)))]
-    [init methods keys+vals children]))
+    [name init methods keys+vals children]))
 
 (defn reduce-init [coll]
   (if-not (seq coll)
@@ -79,18 +84,34 @@
          (map #(if (keyword? %) (get constants %) %))
          (reduce bit-or))))
 
+(defn gen-create-widget [type-name class init methods keys+vals]
+  (let [swt-widget `(new ~type-name
+                         (doto (new ~class *parent* (reduce-init ~init))
+                           ~@methods))]
+    (if (seq keys+vals)
+      `(assoc! ~swt-widget ~@keys+vals)
+      swt-widget)))
+
+(defn gen-create-children [parent children]
+  (if (seq children)
+    `(with-parent (.widget ~parent) ~@children)
+    parent))
+
 (defmacro defwidget*
-  [name type-name class [& fields] opts]
+  [macro-name type-name class [& fields] opts]
   `(do
      (deftype-for-widget ~type-name ~class [~@fields] ~opts)
-     (defmacro ~name ~(:doc opts)
-       {:arglists '([init? methods* keys+vals*] [name? init? methods* keys+vals* children*])}
+     (defmacro ~macro-name ~(:doc opts)
+       {:arglists '([init? methods* keys+vals*] [name? init? methods* keys+vals* children*])
+        ::widget true}
        [& args#]
-       (let [[init# methods# keys+vals# children#] (args-for-defwidget args#)]
-         ;; `(assoc! ~@keys+vals#)
-         `(new ~~type-name
-               (doto (new ~~class *parent* (reduce-init ~init#))
-                 ~@methods#))))))
+       (let [[name# init# methods# keys+vals# children#] (args-for-defwidget args#)
+             create-widget# (gen-create-widget ~type-name ~class init# methods# keys+vals#)]
+         (set! *widget-names* (conj *widget-names* name#)) ; will be defined later, see defgui
+         (if name#
+           `(do (def ~name# ~create-widget#)
+                ~(gen-create-children name# children#))
+           (gen-create-children create-widget# children#))))))
 
 (defmacro defwidget
   ([class]
@@ -102,6 +123,41 @@
            name (de-camel type-name)]
        `(defwidget* ~(symbol name) ~(symbol type-name) ~class []
           {:doc ~doc :deref ~deref}))))
+
+
+;;; defgui ---------------------------------------------------------------------
+
+(def ^:private ^:dynamic *widget-names*)
+
+(defprotocol Gui
+  (init! [this] "Actually creates a widgets defined in this gui.")
+  (root [this] "Returns the root widget of this gui."))
+
+(defn force-listeners [w]
+  (->> w meta ::listeners (map force)))
+
+(defmacro defgui
+  "Defines a Gui with the given name which contains the root widget
+   and its children. Also, declares names for every named widget. If
+   parent argument is not given, it defaults to *display*. Note that
+   defgui call does not actually create widgets, see also 'create!'."
+  ([name root]
+     `(defgui ~name *display* ~root))
+  ([name parent root]
+     (binding [*widget-names* []]
+       (let [expanded-root (macroexpand-all root)]
+         `(do (declare ~@*widget-names*)
+              (let [widgets# (delay (with-parent ~parent ~expanded-root))]
+                (def ~name
+                  (reify Gui
+                    (init! [this#] 
+                      (let [listeners# (->> [~@(map (fn [name] `(var ~name)) *widget-names*)]
+                                            (mapcat (comp ::listeners meta)))]
+                        (prn listeners#)
+                        (force widgets#)
+                        (dorun (map force listeners#))))
+                    (root [this#]
+                      ~(first *widget-names*))))))))))
 
 
 ;;; Widgets declaration --------------------------------------------------------
@@ -116,23 +172,36 @@
 (defwidget org.eclipse.swt.widgets.Scale)
 (defwidget org.eclipse.swt.widgets.Text)
 (defwidget org.eclipse.swt.widgets.MessageBox)
+(defwidget org.eclipse.swt.widgets.Shell)
 
 
 ;;; Utilities ------------------------------------------------------------------
 
 (defn assoc!
-  "TODO: doc"
+  "Sets the property 'key' of the given widget to val. Keys are
+   obtained from setters by replacing CamelCase with hyphens and
+   keywordizing the result. E.g. .setText becomes :set-text.
+   See also: update!"
   ([widget key val]
-     (-assoc widget key val))
+     (-assoc widget key val)
+     widget)
   ([widget key val & keys+vals]
      (doseq [[k v] (concat [key val] keys+vals)]
-       (-assoc widget k v))))
+       (-assoc widget k v))
+     widget))
 
 (defn update!
-  "TODO: doc"
+  "Applies the function f to the old value of property with given key
+  and any number of given args, then sets the value of this property
+  to what the f has returned.
+  See also: assoc!"
   [widget key f & args]
   (assoc! widget key (apply f (get widget key) args)))
 
+
+(defn dispose-if-not [this]
+  (when-not (.isDisposed this)
+    (.dispose this)))
 
 (def ^{:dynamic true :doc "TODO: doc"} *display*)
 
@@ -141,7 +210,7 @@
    display, then calls .dispose on it."
   [display & body]
   `(binding [*display* ~display]
-     (try ~@body (finally (.dispose *display*)))))
+     (try ~@body (finally (dispose-if-not *display*)))))
 
 (defmacro with-new-display
   "Same as (with-display (Display.) ...)"
@@ -164,19 +233,25 @@
      (let [event (if (keyword? event)
                    (get events event)
                    event)]
-       (doto widget
-         (.addListener widget event (reify Listener
-                                      (handleEvent [this e]
-                                        (f e)))))))
+       (doto (.widget widget)
+         (.addListener event (reify Listener
+                               (handleEvent [this e]
+                                 (f e)))))))
   ([widget event f & events+functions]
      (doseq [[e f] (concat [event f] events+functions)]
        (add-listener widget e f))))
 
 (defmacro deflistener
-  "TODO: doc"
+  "Adds a listener to the given widget. Event must be one of SWT event
+  constants, or corresponding keyword (e.g. SWT/MouseUp
+  <=> :mouse-up). Args are binding vector, which must contain 1 item -
+  the event object.
+  See also: sync-exec, async-exec."
   [widget event args & body]
   (assert (= (count args) 1) "Arguments vector must contain exactly 1 item")
-  `(add-listener ~widget ~event (fn [~@args] ~@body)))
+  `(alter-meta! (var ~widget) update-in [::listeners] conj
+                (delay (add-listener ~widget ~event
+                         (fn [~@args] ~@body)))))
 
 
 (defmacro async-exec
@@ -201,26 +276,26 @@
      @res#))
 
 
-;;================================
-;; Shell
-;;================================
+(defn open!
+  "Shows the given shell/dialog on the screen."
+  [this]
+  (-> this .widget .open))
 
-(defmacro shell
-  "Creates shell on the current *display* and returns it."
-  [params & more]
-  `(init-bean (Shell. *display* (reduce bit-or ~params)) ~@more))
+(defn create!
+  "Given a gui, initializes it, opens the root widget (assuming it's a
+  shell and has name defined) and starts a service loop. You should
+  call it only once to start the main shell of your application.
+  Example: (with-new-display (init! my-gui) (create! my-gui))"
+  [gui]
+  (let [shell (-> gui root .widget)]
+    (try
+      (.open shell)
+      (while (not (.isDisposed shell))
+        (when-not (.readAndDispatch *display*)
+          (.sleep *display*)))
+      (finally
+       (dispose-if-not shell)))))
 
-(defn open-shell!
-  "FIXME Calls .open on the given shell and runs ?service? loop while shell is not disposed."
-  [shell]
-  (try
-    (.open shell)
-    (while (not (.isDisposed shell))
-      (when (.readAndDispatch *display*)
-        (.sleep *display*)))
-    (finally
-     (when-not (.isDisposed shell)
-       (.dispose shell)))))
 
 
 ;;; Layouts --------------------------------------------------------------------

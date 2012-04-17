@@ -44,17 +44,19 @@
   (method-call? :foo) => false)
 
 (fact "args-for-defwidget"
-  (args-for-defwidget []) => [#{} () () ()]
-  (args-for-defwidget [#{:foo}]) => [#{:foo} () () ()]
+  (args-for-defwidget '[name #{:init} (.method) :key val (child)])
+  => '[name #{:init} [(.method)] [:key val] [(child)]]
+  (args-for-defwidget []) => [nil #{} () () ()]
+  (args-for-defwidget [#{:foo}]) => [nil #{:foo} () () ()]
   (args-for-defwidget [:prop :val :another :one])
-  => [#{} () [:prop :val :another :one] ()]
-  (args-for-defwidget '[:prop :val (child)]) => [#{} () [:prop :val] '[(child)]]
-  (args-for-defwidget '[(.method) (child)]) => [#{} '[(.method)] () '[(child)]]
+  => [nil #{} () [:prop :val :another :one] ()]
+  (args-for-defwidget '[:prop :val (child)]) => [nil #{} () [:prop :val] '[(child)]]
+  (args-for-defwidget '[(.method) (child)]) => [nil #{} '[(.method)] () '[(child)]]
   (args-for-defwidget '[#{:init}
                         (.setter) (.another)
                         :a-key a-val :b-key b-val
                         (child) (another-one)])
-  => [#{:init}
+  => [nil #{:init}
       '[(.setter) (.another)]
       '[:a-key a-val :b-key b-val]
       '[(child) (another-one)]])
@@ -62,16 +64,25 @@
 (fact "reduce-init"
   (reduce-init #{}) => SWT/NULL
   (reduce-init #{:ok}) => SWT/OK
-  (reduce-init #{:f1 SWT/F2 :f3}) => (bit-or SWT/F1 SWT/F2 SWT/F3)) 
+  (reduce-init #{:f1 SWT/F2 :f3}) => (bit-or SWT/F1 SWT/F2 SWT/F3))
 
-(defonce test-shell (Shell.))
 
-(fact
-  (with-parent test-shell
-    (let [a (button (.setText "foo"))
-          b (button :text "bar")]
-      a => (partial instance? AButton)
-      @a => "deref"
-      (-> a .widget .getText) => "foo"
-      (:text b) => "bar"))
-  (-> #'button meta :doc) => "creates a button")
+;;; Example --------------------------------------------------------------------
+
+(defgui main-gui
+  (shell main-shell #{:title :resize}
+    (.setSize 640 480)
+    (button a-button #{:push}
+      (.setSize 200 300)
+      :text "click")))
+
+(deflistener a-button :mouse-down [e] 
+  (update! a-button :text str "!"))
+
+(defn start []
+  (try
+    (with-new-display
+      (init! main-gui)
+      (create! main-gui))
+    (catch Exception e
+      (.printStackTrace e))))
