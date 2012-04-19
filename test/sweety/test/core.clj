@@ -5,6 +5,7 @@
         midje.util)
   (:import java.util.Date
            org.eclipse.swt.SWT
+           (org.eclipse.swt.graphics Point Color)
            (org.eclipse.swt.widgets Display Listener
                                     Shell Composite Group
                                     Label Button List Canvas Scale Text
@@ -71,22 +72,19 @@
 
 (defgui main-gui
   (shell main-shell #{:title :resize}
-    (.setSize 640 480) 
+    :size [640 480]
     (button a-button #{:push}
-      (.setSize 100 50)
-      :text "click")
+      :text "click"
+      :size [100 50])
     (label
-      (.setLocation 0 50)
-      (.setSize 100 50)
-      :text "unnamed")))
+      :text "unnamed"
+      :location [0 50]
+      :size [100 50])))
 
-(deflistener a-button :mouse-down [e] 
+(deflistener a-button :mouse-down [e]
   (update! a-button :text str "!"))
 
 (defn start []
-  (try
-    (with-new-display
-      (init! main-gui)
-      (create! main-gui))
-    (catch Exception e
-      (.printStackTrace e))))
+  (with-new-display
+    (init! main-gui)
+    (create! main-gui)))

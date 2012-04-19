@@ -4,7 +4,7 @@
         [clojure.walk :only [macroexpand-all]]
         [sweety.constants :only [de-camel events constants]])
   (:import (org.eclipse.swt SWT)
-           (org.eclipse.swt.graphics Color)
+           (org.eclipse.swt.graphics Point Rectangle Color)
            (org.eclipse.swt.layout RowLayout RowData
                                    GridLayout GridData
                                    FillLayout FillData
@@ -33,12 +33,19 @@
 (defn keyword+method-pairs [make-form syms]
   (mapcat (juxt method->keyword make-form) syms))
 
+(declare common-hooks)
+
 (defmacro deftype-for-widget [name class [& fields] opts]
   (let [class (resolve class)
-        setter-forms (keyword+method-pairs (fn [sym] `(. ~'widget ~sym ~'val))
-                                           (setters class))
-        getter-forms (keyword+method-pairs (fn [sym] `(. ~'widget ~sym))
-                                           (getters class))]
+        setter-forms (keyword+method-pairs
+                      (fn [sym]
+                        (if-let [hook (->> opts :hooks (merge common-hooks) sym)]
+                          `(. ~'widget ~sym (~hook ~'val))
+                          `(. ~'widget ~sym ~'val)))
+                      (setters class))
+        getter-forms (keyword+method-pairs
+                      (fn [sym] `(. ~'widget ~sym))
+                      (getters class))]
     `(deftype ~name [~'widget ~@fields]
        Widget
        (-assoc [this# key# ~'val]
@@ -118,11 +125,11 @@
      `(defwidget ~class "" nil))
   ([class doc]
      `(defwidget ~class ~doc nil))
-  ([class doc deref]
+  ([class doc opts]
      (let [type-name (-> class resolve .getSimpleName)
            name (de-camel type-name)]
        `(defwidget* ~(symbol name) ~(symbol type-name) ~class []
-          {:doc ~doc :deref ~deref}))))
+          ~(merge {:doc doc} opts)))))
 
 
 ;;; defgui ---------------------------------------------------------------------
@@ -150,7 +157,7 @@
               (let [widgets# (delay (with-parent ~parent ~expanded-root))]
                 (def ~name
                   (reify Gui
-                    (init! [this#] 
+                    (init! [this#]
                       (let [listeners# (->> [~@(map (fn [name] `(var ~name)) *widget-names*)]
                                             (mapcat (comp ::listeners meta)))]
                         (force widgets#)
@@ -160,6 +167,14 @@
 
 
 ;;; Widgets declaration --------------------------------------------------------
+
+(letfn [(vec->pt [[x y]] (Point. x y))
+        (vec->rect [[x y w h]] (Rectangle. x y w h))]
+  
+  (def ^:private common-hooks
+    {'setSize vec->pt
+     'setLocation vec->pt
+     'setBounds vec->rect}))
 
 (defwidget org.eclipse.swt.widgets.Composite)
 (defwidget org.eclipse.swt.widgets.Label)
@@ -179,15 +194,12 @@
 (defn assoc!
   "Sets the property 'key' of the given widget to val. Keys are
    obtained from setters by replacing CamelCase with hyphens and
-   keywordizing the result. E.g. .setText becomes :set-text.
+   keywordizing the result. E.g. .setText becomes :text.
    See also: update!"
-  ([widget key val]
-     (-assoc widget key val)
-     widget)
-  ([widget key val & keys+vals]
-     (doseq [[k v] (concat [key val] keys+vals)]
-       (-assoc widget k v))
-     widget))
+  [widget & keys+vals]
+  (doseq [[k v] (partition 2 keys+vals)]
+    (-assoc widget k v))
+  widget)
 
 (defn update!
   "Applies the function f to the old value of property with given key
