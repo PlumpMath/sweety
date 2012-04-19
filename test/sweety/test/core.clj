@@ -71,10 +71,14 @@
 
 (defgui main-gui
   (shell main-shell #{:title :resize}
-    (.setSize 640 480)
+    (.setSize 640 480) 
     (button a-button #{:push}
-      (.setSize 200 300)
-      :text "click")))
+      (.setSize 100 50)
+      :text "click")
+    (label
+      (.setLocation 0 50)
+      (.setSize 100 50)
+      :text "unnamed")))
 
 (deflistener a-button :mouse-down [e] 
   (update! a-button :text str "!"))

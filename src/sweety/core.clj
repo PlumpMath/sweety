@@ -107,7 +107,7 @@
        [& args#]
        (let [[name# init# methods# keys+vals# children#] (args-for-defwidget args#)
              create-widget# (gen-create-widget ~type-name ~class init# methods# keys+vals#)]
-         (set! *widget-names* (conj *widget-names* name#)) ; will be defined later, see defgui
+         (when name# (set! *widget-names* (conj *widget-names* name#))) ; will be defined later, see defgui
          (if name#
            `(do (def ~name# ~create-widget#)
                 ~(gen-create-children name# children#))
@@ -130,7 +130,7 @@
 (def ^:private ^:dynamic *widget-names*)
 
 (defprotocol Gui
-  (init! [this] "Actually creates a widgets defined in this gui.")
+  (init! [this] "Actually creates widgets defined in this gui.")
   (root [this] "Returns the root widget of this gui."))
 
 (defn force-listeners [w]
@@ -153,7 +153,6 @@
                     (init! [this#] 
                       (let [listeners# (->> [~@(map (fn [name] `(var ~name)) *widget-names*)]
                                             (mapcat (comp ::listeners meta)))]
-                        (prn listeners#)
                         (force widgets#)
                         (dorun (map force listeners#))))
                     (root [this#]
