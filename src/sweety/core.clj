@@ -1,218 +1,9 @@
 (ns sweety.core
-  (:refer-clojure :exclude [list assoc!])
-  (:use [clojure.string :only [capitalize split join lower-case]]
-        [clojure.walk :only [macroexpand-all]]
-        [sweety.constants :only [de-camel events constants]])
-  (:import (org.eclipse.swt SWT)
-           (org.eclipse.swt.graphics Point Rectangle Color)
-           (org.eclipse.swt.layout RowLayout RowData
-                                   GridLayout GridData
-                                   FillLayout FillData
-                                   FormLayout FormData FormAttachment)
+  (:refer-clojure :exclude [assoc!])
+  (:use [sweety.defwidget :only [-assoc! -init!]]
+        [sweety.constants :only [events]])
+  (:import (org.eclipse.swt.graphics Color) 
            (org.eclipse.swt.widgets Listener)))
-
-
-;;; defwidget ------------------------------------------------------------------
-
-(defprotocol Widget
-  (-assoc [this key val]))
-
-(letfn [(methods-starting-with [start c]
-          (->> (.getMethods c)
-               (map #(.getName %))
-               (filter #(.startsWith % start))
-               distinct
-               (map symbol)))]
-
-  (def ^:private getters (partial methods-starting-with "get"))
-  (def ^:private setters (partial methods-starting-with "set")))
-
-(defn method->keyword [sym]
-  (-> sym str (subs 3) de-camel keyword))
-
-(defn keyword+method-pairs [make-form syms]
-  (mapcat (juxt method->keyword make-form) syms))
-
-(declare common-hooks)
-
-(defmacro deftype-for-widget [name class [& fields] opts]
-  (let [class (resolve class)
-        setter-forms (keyword+method-pairs
-                      (fn [sym]
-                        (if-let [hook (->> opts :hooks (merge common-hooks) sym)]
-                          `(. ~'widget ~sym (~hook ~'val))
-                          `(. ~'widget ~sym ~'val)))
-                      (setters class))
-        getter-forms (keyword+method-pairs
-                      (fn [sym] `(. ~'widget ~sym))
-                      (getters class))]
-    `(deftype ~name [~'widget ~@fields]
-       Widget
-       (-assoc [this# key# ~'val]
-         (case key#
-           ~@setter-forms))
-
-       clojure.lang.ILookup
-       (valAt [this# key#]
-         (case key#
-           ~@getter-forms))
-       (valAt [this# key# not-found#]
-         (if-let [ret# (get this# key#)] ret# not-found#))
-
-       clojure.lang.IDeref
-       (deref [this#] ~(:deref opts)))))
-
-
-;; TODO: it's ugly, refactor somehow
-(defn method-call? [form]
-  (if (list? form)
-    (let [[sym] form]
-      (and (symbol? sym) (= \. (first (str sym)))))
-    false))
-
-(defn args-for-defwidget [[maybe-name :as more]]
-  (let [[name [maybe-init :as more]] (if (symbol? maybe-name)
-                                       [maybe-name (rest more)]
-                                       [nil more])
-        [init more] (if (set? maybe-init)
-                      [maybe-init (rest more)]
-                      [#{} more])
-        [methods more] (split-with (every-pred list? method-call?)
-                                   more)
-        [keys+vals children] (map (partial apply concat)
-                                  (split-with (comp keyword? first)
-                                              (partition-all 2 more)))]
-    [name init methods keys+vals children]))
-
-(defn reduce-init [coll]
-  (if-not (seq coll)
-    SWT/NULL
-    (->> coll
-         (map #(if (keyword? %) (get constants %) %))
-         (reduce bit-or))))
-
-(defn gen-create-widget [type-name class init methods keys+vals]
-  (let [swt-widget `(new ~type-name
-                         (doto (new ~class *parent* (reduce-init ~init))
-                           ~@methods))]
-    (if (seq keys+vals)
-      `(assoc! ~swt-widget ~@keys+vals)
-      swt-widget)))
-
-(defn gen-create-children [parent children]
-  (if (seq children)
-    `(with-parent (.widget ~parent) ~@children)
-    parent))
-
-(defmacro defwidget*
-  [macro-name type-name class [& fields] opts]
-  `(do
-     (deftype-for-widget ~type-name ~class [~@fields] ~opts)
-     (defmacro ~macro-name ~(:doc opts)
-       {:arglists '([init? methods* keys+vals*] [name? init? methods* keys+vals* children*])
-        ::widget true}
-       [& args#]
-       (let [[name# init# methods# keys+vals# children#] (args-for-defwidget args#)
-             create-widget# (gen-create-widget ~type-name ~class init# methods# keys+vals#)]
-         (when name# (set! *widget-names* (conj *widget-names* name#))) ; will be defined later, see defgui
-         (if name#
-           `(do (def ~name# ~create-widget#)
-                ~(gen-create-children name# children#))
-           (gen-create-children create-widget# children#))))))
-
-(defmacro defwidget
-  ([class]
-     `(defwidget ~class "" nil))
-  ([class doc]
-     `(defwidget ~class ~doc nil))
-  ([class doc opts]
-     (let [type-name (-> class resolve .getSimpleName)
-           name (de-camel type-name)]
-       `(defwidget* ~(symbol name) ~(symbol type-name) ~class []
-          ~(merge {:doc doc} opts)))))
-
-
-;;; defgui ---------------------------------------------------------------------
-
-(def ^:private ^:dynamic *widget-names*)
-
-(defprotocol Gui
-  (init! [this] "Actually creates widgets defined in this gui.")
-  (root [this] "Returns the root widget of this gui."))
-
-(defn force-listeners [w]
-  (->> w meta ::listeners (map force)))
-
-(defmacro defgui
-  "Defines a Gui with the given name which contains the root widget
-   and its children. Also, declares names for every named widget. If
-   parent argument is not given, it defaults to *display*. Note that
-   defgui call does not actually create widgets, see also 'create!'."
-  ([name root]
-     `(defgui ~name *display* ~root))
-  ([name parent root]
-     (binding [*widget-names* []]
-       (let [expanded-root (macroexpand-all root)]
-         `(do (declare ~@*widget-names*)
-              (let [widgets# (delay (with-parent ~parent ~expanded-root))]
-                (def ~name
-                  (reify Gui
-                    (init! [this#]
-                      (let [listeners# (->> [~@(map (fn [name] `(var ~name)) *widget-names*)]
-                                            (mapcat (comp ::listeners meta)))]
-                        (force widgets#)
-                        (dorun (map force listeners#))))
-                    (root [this#]
-                      ~(first *widget-names*))))))))))
-
-
-;;; Widgets declaration --------------------------------------------------------
-
-(letfn [(vec->pt [[x y]] (Point. x y))
-        (vec->rect [[x y w h]] (Rectangle. x y w h))]
-  
-  (def ^:private common-hooks
-    {'setSize vec->pt
-     'setLocation vec->pt
-     'setBounds vec->rect}))
-
-(defwidget org.eclipse.swt.browser.Browser)
-
-(defwidget org.eclipse.swt.widgets.Button)
-(defwidget org.eclipse.swt.widgets.Canvas)
-(defwidget org.eclipse.swt.widgets.Combo)
-(defwidget org.eclipse.swt.widgets.Composite)
-(defwidget org.eclipse.swt.widgets.CoolBar)
-(defwidget org.eclipse.swt.widgets.DateTime)
-(defwidget org.eclipse.swt.widgets.ExpandBar)
-(defwidget org.eclipse.swt.widgets.Group)
-(defwidget org.eclipse.swt.widgets.Label)
-(defwidget org.eclipse.swt.widgets.Link)
-(defwidget org.eclipse.swt.widgets.List)
-(defwidget org.eclipse.swt.widgets.Menu)
-(defwidget org.eclipse.swt.widgets.ProgressBar)
-(defwidget org.eclipse.swt.widgets.Sash)
-(defwidget org.eclipse.swt.widgets.Shell)
-(defwidget org.eclipse.swt.widgets.Slider)
-(defwidget org.eclipse.swt.widgets.Scale)
-(defwidget org.eclipse.swt.widgets.Spinner)
-(defwidget org.eclipse.swt.widgets.TabFolder)
-(defwidget org.eclipse.swt.widgets.Table)
-(defwidget org.eclipse.swt.widgets.Text)
-(defwidget org.eclipse.swt.widgets.ToolBar)
-(defwidget org.eclipse.swt.widgets.Tray)
-(defwidget org.eclipse.swt.widgets.Tree)
-
-(defwidget org.eclipse.swt.widgets.FileDialog)
-(defwidget org.eclipse.swt.widgets.MessageBox)
-
-;;;  Custom
-(defwidget org.eclipse.swt.custom.CTabFolder)
-(defwidget org.eclipse.swt.custom.ScrolledComposite)
-(defwidget org.eclipse.swt.custom.StyledText)
-
-
-;;; Utilities ------------------------------------------------------------------
 
 (defn assoc!
   "Sets the property 'key' of the given widget to val. Keys are
@@ -221,7 +12,7 @@
    See also: update!"
   [widget & keys+vals]
   (doseq [[k v] (partition 2 keys+vals)]
-    (-assoc widget k v))
+    (-assoc! widget k v))
   widget)
 
 (defn update!
@@ -315,77 +106,42 @@
   [this]
   (-> this .widget .open))
 
-(defn create!
-  "Given a gui, initializes it, opens the root widget (assuming it's a
-  shell and has name defined) and starts a service loop. You should
-  call it only once to start the main shell of your application.
-  Example: (with-new-display (init! my-gui) (create! my-gui))"
-  [gui]
-  (let [shell (-> gui root .widget)]
-    (try
-      (.open shell)
-      (while (not (.isDisposed shell))
-        (when-not (.readAndDispatch *display*)
-          (.sleep *display*)))
-      (finally
-       (dispose-if-not shell)))))
+;; FIXME: rework
+;; (defn create!
+;;   "Given a gui, initializes it, opens the root widget (assuming it's a
+;;   shell and has name defined) and starts a service loop. You should
+;;   call it only once to start the main shell of your application.
+;;   Example: (with-new-display (init! my-gui) (create! my-gui))"
+;;   [gui]
+;;   (let [shell (-> gui root .widget)]
+;;     (try
+;;       (.open shell)
+;;       (while (not (.isDisposed shell))
+;;         (when-not (.readAndDispatch *display*)
+;;           (.sleep *display*)))
+;;       (finally
+;;        (dispose-if-not shell)))))
 
 
+;;; defgui --------------------------------------------------------------------- 
 
-;;; Layouts --------------------------------------------------------------------
-;; TODO: refactor
+(defn init-widget
+  "Creates and initializes the widget and all its children. Returns widget."
+  [[root & children :as widgets]]
+  (letfn [(init-widget-children [[parent & children]]
+            (-init! parent)
+            (doseq [child children]
+              (with-parent parent
+                (init-widget-children child))))]
+    (init-widget-children widgets)))
 
-(defn- camel-case [s]
-  (join (map capitalize (split s #"-"))))
-
-(defn keyword->field [kw]
-  (let [[f & rest] (-> kw name camel-case seq)]
-    (symbol (apply str (Character/toLowerCase f) rest))))
-
-(defmacro layout [type & args]
-  (let [class (case type
-                :row RowLayout
-                :grid GridLayout
-                :fill FillLayout
-                :form FormLayout
-                (throw (IllegalArgumentException. "Unsupported layout type.")))
-        layout (gensym "layout")]
-    (if (seq args)
-      `(let [~layout (new ~class)]
-         ~@(for [[k v] (partition 2 args)]
-             `(set! (. ~layout ~(keyword->field k)) ~v))
-         ~layout)
-      `(new ~class))))
-
-(defmacro form-layout [& args] `(layout :form ~@args))
-(defmacro row-layout  [& args] `(layout :row ~@args))
-(defmacro grid-layout [& args] `(layout :grid ~@args))
-(defmacro fill-layout [& args] `(layout :fill ~@args))
-
-
-;;--------------------------------------------------------------------------------
-;; WARNING: Heavy copypasting here; to be refactored
-(defmacro layout-data [type & args]
-  (let [class (case type
-                :row RowData, :grid GridData
-                :fill FillData, :form FormData
-                (throw (IllegalArgumentException. "Unsupported layout data type.")))
-        layout (gensym "layout")]
-    (if (seq args)
-      `(let [~layout (new ~class)]
-         ~@(for [[k v] (partition 2 args)]
-             `(set! (. ~layout ~(keyword->field k)) ~v))
-         ~layout)
-      `(new ~class))))
-
-(defmacro form-data [& args] `(layout-data :form ~@args))
-(defmacro row-data  [& args] `(layout-data :row ~@args))
-(defmacro grid-data [& args] `(layout-data :grid ~@args))
-(defmacro fill-data [& args] `(layout-data :fill ~@args))
-;;--------------------------------------------------------------------------------
-
-(defn form-attachment [percents-or-widget shift]
-  (FormAttachment. percents-or-widget shift))
+(defmacro defgui
+  ([name args widgets]
+     `(defgui ~name nil ~args ~widgets))
+  ([name doc-string args widgets]
+     `(defn ~name {:doc ~doc-string ::gui true}
+        [~@args]
+        (init-widget ~widgets))))
 
 
 ;;; Misc -----------------------------------------------------------------------

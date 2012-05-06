@@ -1,17 +1,7 @@
 (ns sweety.constants
   "TODO: doc"
-  (:refer-clojure :exclude [min max time short long])
-  (:require [clojure.string :as string])
-  (:import org.eclipse.swt.SWT)) 
-
-(defn de-camel [s]
-  (->> (partition-by #(Character/isUpperCase %) s)
-       (partition 2)
-       (map #(string/lower-case (apply str (apply concat %))))
-       (string/join "-")))
-
-(defn lower-case [s]
-  (-> s (string/replace "_" "-") string/lower-case))
+  (:use [sweety.utils :only [de-camel lower-case]])
+  (:import org.eclipse.swt.SWT))
 
 (defn generate-swt-constants-map [f names]
   (into {} (map (fn [s] [(-> s f keyword)
