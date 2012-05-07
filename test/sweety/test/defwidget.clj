@@ -26,6 +26,7 @@
   (method-call? '(foo)) => false
   (method-call? :foo) => false)
 
+;; FIXME: fails
 (fact "args-for-defwidget"
   (args-for-defwidget '[::name #{:init} (.method) :key val (child)])
   => '[::name #{:init} [(.method)] [:key val] [(child)]]
@@ -50,7 +51,7 @@
   (reduce-init #{:f1 SWT/F2 :f3}) => (bit-or SWT/F1 SWT/F2 SWT/F3))
 
 (tabular "parse-name-keyword"
-  (fact (parse-name-keyword input) => {:id id :classes classes})
+  (fact (parse-name-keyword input) => [id classes])
   input      id     classes
   ::foo      ::foo  []
   ::foo#bar  ::foo  [:bar]
