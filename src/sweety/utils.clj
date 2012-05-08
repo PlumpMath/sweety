@@ -2,7 +2,7 @@
   "TODO: doc"
   (:require [clojure.string :as string]))
 
-(defn de-camel 
+(defn de-camel
   [s]
   (->> (partition-by #(Character/isUpperCase %) s)
        (partition 2)
@@ -23,4 +23,5 @@
   (def setters (partial methods-starting-with "set")))
 
 (defn method->keyword [sym]
-  (-> sym str (subs 3) de-camel keyword))
+  (let [lower #(let [s (de-camel %)] (if (seq s) s %))]
+    (-> sym str (subs 3) lower keyword)))

@@ -17,4 +17,5 @@
 
 (fact "method->keyword"
   (method->keyword 'getSomething) => :something
-  (method->keyword 'setSomethingDifferent) => :something-different)
+  (method->keyword 'setSomethingDifferent) => :something-different
+  (method->keyword 'getIME) => :IME)
