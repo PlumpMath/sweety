@@ -5,6 +5,7 @@
   (:import (org.eclipse.swt SWT)))
 
 (defprotocol Widget
+  (set-swt-object! [this val])
   (-swt-object [this] "Returns the underlying SWT widget.")
   (-id [this] "Returns the unique id of this widget.")
   (-children [this] "Returns a coll of the children of this widget.")
@@ -22,40 +23,63 @@
   `(binding [*parent* ~widget] ~@body))
 
 
-(defn emit-widget-impl []
-  `[(-swt-object [this#] (deref ~'swt-object))
-    (-id [this#] ~'id)
-    (-children [this#] ~'children)
-    (-add-init-fn! [this# f#] (swap! ~'init-fns conj f#))
-    (-init! [this#] (doseq [f# (deref ~'init-fns)]
-                      (f# this#)))])
-
 (defmulti get-property-hook
   (fn [class method-name] [class method-name]))
 
 (defmethod get-property-hook :default [_ _]
   nil)
 
+(defmacro defhooks
+  "Defines property hooks for the given class or interface. Each
+  declaration has the form: (name set-hook get-hook), where name is
+  the property name (i.e. setter or getter name without 'set' or
+  'get') and set-hook and get-hook are single-argument functions which
+  will be applied to the value passed to/returned from appropriate
+  setter/getter."
+  [class & declarations]
+  (->> (for [[prop set-hook get-hook] declarations
+             :let [setter (->> prop (str "set") symbol)
+                   getter (->> prop (str "get") symbol)]]
+         `[(defmethod get-property-hook [~class '~setter] [_# _#] ~set-hook)
+           (defmethod get-property-hook [~class '~getter] [_# _#] ~get-hook)])
+       (apply concat)
+       (cons `do)))
+
+
+(defn emit-widget-impl []
+  `[(set-swt-object! [this# val#] (reset! ~'swt-object val#))
+    (-swt-object [this#] (deref ~'swt-object))
+    (-id [this#] ~'id)
+    (-children [this#] ~'children)
+    (-add-init-fn! [this# f#] (swap! ~'init-fns conj f#))
+    (-init! [this#] (doseq [f# (deref ~'init-fns)]
+                      (f# this#)))])
+
 (defn keyword+method-pairs [gen-method syms]
   (mapcat (juxt method->keyword gen-method) syms))
 
 (defn emit-itransient-impl [class]
-  (let [val (gensym "val")
+  (let [[this val] (map gensym ["this" "val"])
         kws+setters (keyword+method-pairs
                      (fn [sym]
                        (if-let [hook (get-property-hook class sym)]
-                         `(. ~'swt-object ~sym (~hook ~val))
-                         `(. ~'swt-object ~sym ~val)))
+                         `(. (-swt-object ~this) ~sym (~hook ~val))
+                         `(. (-swt-object ~this) ~sym ~val)))
                      (setters class))]
-    `[(assoc [this# key# ~val]
+    `[(assoc [~this key# ~val]
         (case key#
-          ~@kws+setters))]))
+          ~@kws+setters)
+        ~this)]))
 
 (defn emit-ilookup-impl [class]
-  (let [kws+getters (keyword+method-pairs
-                     (fn [sym] `(. ~'swt-object ~sym))
+  (let [this (gensym "this")
+        kws+getters (keyword+method-pairs
+                     (fn [sym]
+                       (if-let [hook (get-property-hook class sym)]
+                         `(~hook (. (-swt-object ~this) ~sym))
+                         `(. (-swt-object ~this) ~sym)))
                      (getters class))]
-    `[(valAt [this# key#]
+    `[(valAt [~this key#]
              (case key#
                ~@kws+getters))
       (valAt [this# key# not-found#]
@@ -102,8 +126,8 @@
   [class {:keys [swt-object init-fns id children meta validator watchers]
           :or {swt-object `(atom nil)
                init-fns `(atom ())
-               metadata {}
-               watchers {}}}]
+               meta `(atom {})
+               watchers `(atom {})}}]
   (list 'new class swt-object init-fns id children meta validator watchers))
 
 (defn initialized? [widget]
@@ -140,7 +164,7 @@
 
 (defn compute-style
   "Given a collection of SWT constants (or corresponding keywords),
-  applies bit-or to them and returns the resulting number." 
+  applies bit-or to them and returns the resulting number."
   [coll]
   {:pre [(every? (some-fn constants number?) coll)]}
   (if-not (seq coll)
@@ -155,9 +179,9 @@
         assoc-keys+vals (when (seq keys+vals)
                           `(assoc! ~widget ~@keys+vals))]
     `(fn [~widget]
-       (reset! (-swt-object ~widget)
-               (doto (new ~class *parent* (compute-style ~style))
-                 ~@methods))
+       (set-swt-object! ~widget
+                        (doto (new ~class *parent* (compute-style ~style))
+                          ~@methods))
        ~assoc-keys+vals)))
 
 (defmacro defwidget*

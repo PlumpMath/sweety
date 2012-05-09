@@ -76,12 +76,13 @@
      @res#)) 
 
 
-(defn init-widget!
-  "Initializes the widget and all its children."
-  [widget] 
+(defn init-widgets!
+  "Initializes the widget and all its children. Returns widget."
+  [widget]
   (-init! widget)
   (doseq [child (-children widget)]
-    (with-parent widget (init-widget! child))))
+    (with-parent (-swt-object widget) (init-widgets! child)))
+  widget)
 
 (defmacro defgui
   "TODO: doc"
@@ -90,7 +91,7 @@
   ([name doc-string args widgets]
      `(defn ~name {:doc ~doc-string ::gui true}
         [~@args]
-        (fn [] (init-widget! ~widgets)))))
+        (fn [] (init-widgets! ~widgets)))))
 
 
 (defn dispose-if-not [this]
