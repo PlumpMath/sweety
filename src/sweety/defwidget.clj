@@ -4,22 +4,31 @@
         [sweety.constants :only [events constants]])
   (:import (org.eclipse.swt SWT)))
 
-;;; defwidget ------------------------------------------------------------------
-
 (defprotocol Widget
-  (-swt-object [this] "Returns underlying SWT widget.")
-  (-id [this] "Returns unique id of this widget.")
+  (-swt-object [this] "Returns the underlying SWT widget.")
+  (-id [this] "Returns the unique id of this widget.")
   (-children [this] "Returns a coll of the children of this widget.")
-  (-add-init-fn! [this f] "Adds f to the coll of init functions. f must
-  be a function which takes and returns the widget.")
-  (-init! [this] "Creates the widget and calls all init functions on it."))
+  (-add-init-fn! [this f] "Adds f to the coll of init functions. f
+  must be a function (presumably with side effects) which takes one
+  argument, the widget.")
+  (-init! [this] "Calls all init functions for this widget."))
+
+
+(def ^{:dynamic true :doc "TODO: doc"} *parent*)
+
+(defmacro with-parent
+  "Evaluates body with the *parent* bound to the given widget."
+  [widget & body]
+  `(binding [*parent* ~widget] ~@body))
+
 
 (defn emit-widget-impl []
   `[(-swt-object [this#] (deref ~'swt-object))
     (-id [this#] ~'id)
     (-children [this#] ~'children)
     (-add-init-fn! [this# f#] (swap! ~'init-fns conj f#))
-    (-init! [this#] (swap! ~'swt-object (comp ~'init-fns)))])
+    (-init! [this#] (doseq [f# (deref ~'init-fns)]
+                      (f# this#)))])
 
 (defmulti get-property-hook
   (fn [class method-name] [class method-name]))
@@ -27,7 +36,6 @@
 (defmethod get-property-hook :default [_ _]
   nil)
 
-;; FIXME: getIME becomes just :
 (defn keyword+method-pairs [gen-method syms]
   (mapcat (juxt method->keyword gen-method) syms))
 
@@ -92,7 +100,10 @@
 
 (defmacro make-widget
   [class {:keys [swt-object init-fns id children meta validator watchers]
-          :or {init-fns (atom ()), metadata {}, watchers {}}}]
+          :or {swt-object `(atom nil)
+               init-fns `(atom ())
+               metadata {}
+               watchers {}}}]
   (list 'new class swt-object init-fns id children meta validator watchers))
 
 (defn initialized? [widget]
@@ -122,7 +133,15 @@
                                               (partition-all 2 more)))]
     [name init methods keys+vals children]))
 
-(defn reduce-init [coll]
+(defn parse-name-keyword [kw]
+  (let [[id & classes] (split (name kw) #"#")]
+    [(when (seq id) (keyword (namespace kw) id))
+     (map keyword classes)]))
+
+(defn compute-style
+  "Given a collection of SWT constants (or corresponding keywords),
+  applies bit-or to them and returns the resulting number." 
+  [coll]
   {:pre [(every? (some-fn constants number?) coll)]}
   (if-not (seq coll)
     SWT/NULL
@@ -130,30 +149,29 @@
          (map #(if (keyword? %) (get constants %) %))
          (reduce bit-or))))
 
-(defn gen-create-widget [class init methods keys+vals]
-  (let [swt-widget `(doto (new ~class *parent* (reduce-init ~init))
-                      ~@methods)]
-    (if (seq keys+vals)
-      `(assoc! ~swt-widget ~@keys+vals)
-      swt-widget)))
-
-(defn parse-name-keyword [kw]
-  (let [[id & classes] (split (name kw) #"#")]
-    [(when (seq id) (keyword (namespace kw) id))
-     (map keyword classes)]))
+(defn gen-init-fn [class style methods keys+vals]
+  {:pre [(even? (count keys+vals))]}
+  (let [widget (gensym "widget")
+        assoc-keys+vals (when (seq keys+vals)
+                          `(assoc! ~widget ~@keys+vals))]
+    `(fn [~widget]
+       (reset! (-swt-object ~widget)
+               (doto (new ~class *parent* (compute-style ~style))
+                 ~@methods))
+       ~assoc-keys+vals)))
 
 (defmacro defwidget*
   [macro-name type-name class attr-map]
   `(let [type# (deftype-for-widget ~type-name ~class)]
      (defmacro ~macro-name ~attr-map
        [& args#]
-       (let [[name# init# methods# keys+vals# children#] (args-for-defwidget args#)
-             create-widget# (gen-create-widget ~class init# methods# keys+vals#)
+       (let [[name# style# methods# keys+vals# children#] (args-for-defwidget args#)
              [id# classes#] (parse-name-keyword name#) ;; TODO: classes
              opts# {} ; XXX: will be returned from args-for-defwidget
-             opts# (merge opts# {:id id# :children (vec children#)})]
+             opts# (merge opts# {:id id# :children (vec children#)})
+             init# (gen-init-fn ~class style# methods# keys+vals#)]
          `(doto (make-widget ~type# ~opts#)
-            (-add-init-fn! (fn [~(gensym)] ~create-widget#)))))))
+            (-add-init-fn! ~init#))))))
 
 (defmacro defwidget
   ([class]
@@ -163,7 +181,7 @@
   ([class doc attr-map]
      (let [type-name (-> class resolve .getSimpleName symbol)
            name (-> type-name str de-camel symbol)
-           arglists '(quote ([name? init? methods* keys+vals* children*]))
+           arglists '(quote ([name? style? methods* keys+vals* children*]))
            attr-map (merge {:arglists arglists :doc doc}
                            attr-map)]
        `(defwidget* ~name ~type-name ~class ~attr-map))))

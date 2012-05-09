@@ -45,10 +45,10 @@
       '[:a-key a-val :b-key b-val]
       '[(child) (another-one)]])
 
-(fact "reduce-init"
-  (reduce-init #{}) => SWT/NULL
-  (reduce-init #{:ok}) => SWT/OK
-  (reduce-init #{:f1 SWT/F2 :f3}) => (bit-or SWT/F1 SWT/F2 SWT/F3))
+(fact "compute-style"
+  (compute-style #{}) => SWT/NULL
+  (compute-style #{:ok}) => SWT/OK
+  (compute-style #{:f1 SWT/F2 :f3}) => (bit-or SWT/F1 SWT/F2 SWT/F3))
 
 (tabular "parse-name-keyword"
   (fact (parse-name-keyword input) => [id classes])
