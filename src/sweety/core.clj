@@ -1,5 +1,5 @@
 (ns sweety.core
-  (:use [sweety.defwidget :only [with-parent -swt-object -init! -children]]
+  (:use [sweety.defwidget :only [with-parent get-swt-object init! get-children]]
         [sweety.constants :only [events]])
   (:import (org.eclipse.swt.graphics Color)
            (org.eclipse.swt.widgets Listener Display)))
@@ -15,7 +15,7 @@
 (defn open!
   "Shows the given shell/dialog on the screen."
   [this]
-  (-> this -swt-object .open))
+  (-> this get-swt-object .open))
 
 
 (defn listener
@@ -34,7 +34,7 @@
      (let [event (if (keyword? event)
                    (get events event)
                    event)]
-       (doto (-swt-object widget)
+       (doto (get-swt-object widget)
          (.addListener event (listener f)))))
   ([widget event f & events+functions]
      (doseq [[e f] (concat [event f] events+functions)]
@@ -79,9 +79,9 @@
 (defn init-widgets!
   "Initializes the widget and all its children. Returns widget."
   [widget]
-  (-init! widget)
-  (doseq [child (-children widget)]
-    (with-parent (-swt-object widget) (init-widgets! child)))
+  (init! widget)
+  (doseq [child (get-children widget)]
+    (with-parent (get-swt-object widget) (init-widgets! child)))
   widget)
 
 (defmacro defgui
@@ -111,7 +111,7 @@
   "TODO: doc"
   [gui]
   (with-display (Display.)
-    (let [shell (-swt-object (with-parent *display* (gui)))]
+    (let [shell (get-swt-object (with-parent *display* (gui)))]
       (try
         (.open shell)
         (while (not (.isDisposed shell))

@@ -6,13 +6,13 @@
 
 (defprotocol Widget
   (set-swt-object! [this val])
-  (-swt-object [this] "Returns the underlying SWT widget.")
-  (-id [this] "Returns the unique id of this widget.")
-  (-children [this] "Returns a coll of the children of this widget.")
-  (-add-init-fn! [this f] "Adds f to the coll of init functions. f
+  (get-swt-object [this] "Returns the underlying SWT widget.")
+  (get-id [this] "Returns the unique id of this widget.")
+  (get-children [this] "Returns a coll of the children of this widget.")
+  (add-init-fn! [this f] "Adds f to the coll of init functions. f
   must be a function (presumably with side effects) which takes one
   argument, the widget.")
-  (-init! [this] "Calls all init functions for this widget."))
+  (init! [this] "Calls all init functions for this widget."))
 
 
 (def ^{:dynamic true :doc "TODO: doc"} *parent*)
@@ -48,11 +48,11 @@
 
 (defn emit-widget-impl []
   `[(set-swt-object! [this# val#] (reset! ~'swt-object val#))
-    (-swt-object [this#] (deref ~'swt-object))
-    (-id [this#] ~'id)
-    (-children [this#] ~'children)
-    (-add-init-fn! [this# f#] (swap! ~'init-fns conj f#))
-    (-init! [this#] (doseq [f# (deref ~'init-fns)]
+    (get-swt-object [this#] (deref ~'swt-object))
+    (get-id [this#] ~'id)
+    (get-children [this#] ~'children)
+    (add-init-fn! [this# f#] (swap! ~'init-fns conj f#))
+    (init! [this#] (doseq [f# (deref ~'init-fns)]
                       (f# this#)))])
 
 (defn keyword+method-pairs [gen-method syms]
@@ -63,8 +63,8 @@
         kws+setters (keyword+method-pairs
                      (fn [sym]
                        (if-let [hook (get-property-hook class sym)]
-                         `(. (-swt-object ~this) ~sym (~hook ~val))
-                         `(. (-swt-object ~this) ~sym ~val)))
+                         `(. (get-swt-object ~this) ~sym (~hook ~val))
+                         `(. (get-swt-object ~this) ~sym ~val)))
                      (setters class))]
     `[(assoc [~this key# ~val]
         (case key#
@@ -76,8 +76,8 @@
         kws+getters (keyword+method-pairs
                      (fn [sym]
                        (if-let [hook (get-property-hook class sym)]
-                         `(~hook (. (-swt-object ~this) ~sym))
-                         `(. (-swt-object ~this) ~sym)))
+                         `(~hook (. (get-swt-object ~this) ~sym))
+                         `(. (get-swt-object ~this) ~sym)))
                      (getters class))]
     `[(valAt [~this key#]
              (case key#
@@ -131,7 +131,7 @@
   (list 'new class swt-object init-fns id children meta validator watchers))
 
 (defn initialized? [widget]
-  (not= nil (-swt-object widget)))
+  (not= nil (get-swt-object widget)))
 
 
 ;; TODO: it's ugly, refactor somehow
@@ -195,7 +195,7 @@
              opts# (merge opts# {:id id# :children (vec children#)})
              init# (gen-init-fn ~class style# methods# keys+vals#)]
          `(doto (make-widget ~type# ~opts#)
-            (-add-init-fn! ~init#))))))
+            (add-init-fn! ~init#))))))
 
 (defmacro defwidget
   ([class]
