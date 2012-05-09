@@ -1,27 +1,96 @@
 (ns sweety.core
-  (:refer-clojure :exclude [assoc!])
-  (:use [sweety.defwidget :only [-assoc! -init!]]
+  (:use [sweety.defwidget :only [with-parent -swt-object -init! -children]]
         [sweety.constants :only [events]])
-  (:import (org.eclipse.swt.graphics Color) 
-           (org.eclipse.swt.widgets Listener)))
-
-(defn assoc!
-  "Sets the property 'key' of the given widget to val. Keys are
-   obtained from setters by replacing CamelCase with hyphens and
-   keywordizing the result. E.g. .setText becomes :text.
-   See also: update!"
-  [widget & keys+vals]
-  (doseq [[k v] (partition 2 keys+vals)]
-    (-assoc! widget k v))
-  widget)
+  (:import (org.eclipse.swt.graphics Color)
+           (org.eclipse.swt.widgets Listener Display)))
 
 (defn update!
-  "Applies the function f to the old value of property with given key
-  and any number of given args, then sets the value of this property
-  to what the f has returned.
-  See also: assoc!"
+  "Sets the value of property named by `key` to:
+  (apply f current-value-of-property args). Returns widget.
+  Note: use clojure.core/assoc! to set the value of property
+  directly."
   [widget key f & args]
   (assoc! widget key (apply f (get widget key) args)))
+
+(defn open!
+  "Shows the given shell/dialog on the screen."
+  [this]
+  (-> this -swt-object .open))
+
+
+(defn listener
+  "Turns the given single-argument function into a Listener object."
+  [f]
+  (reify Listener
+    (handleEvent [this e]
+      (f e))))
+
+(defn add-listener!
+  "Adds a listener to the given widget. `event` must be an SWT event
+  constant or corresponding keyword (e.g. SWT/MouseUp <=> :mouse-up).
+  `f` must be a function of one argument, the Event object.
+  See also: deflistener."
+  ([widget event f] {:pre [(or (events event) (some #{event} (vals events)))]}
+     (let [event (if (keyword? event)
+                   (get events event)
+                   event)]
+       (doto (-swt-object widget)
+         (.addListener event (listener f)))))
+  ([widget event f & events+functions]
+     (doseq [[e f] (concat [event f] events+functions)]
+       (add-listener! widget e f))))
+
+(defmacro deflistener
+  "Defines a listener for the widget named by `id`.
+  `event` must be an SWT event constant or corresponding
+  keyword (e.g. SWT/MouseUp <=> :mouse-up). `args` is a vector which
+  must contain one symbol to which the Event object will be bound in
+  `body`. The listener will be added right after initialization of the
+  widget (refer to the `defgui` doc for details about widget
+  initialization process).
+  See also: add-listener!, sync-exec, async-exec."
+  [id event args & body]
+  {:pre [(= (count args) 1)]}
+  ;; TODO: write
+  )
+
+
+(defmacro async-exec
+  "Asyncronously executes body (which presumably updates UI).
+  Returns nil. Use it when you want to have access to SWT widgets from
+  non-UI thread. Note that you should usually prefer this over the
+  `sync-exec`."
+  [& body]
+  `(.asyncExec (Display/getDefault)
+               (reify Runnable
+                 (run [this#] (do ~@body)))))
+
+(defmacro sync-exec
+  "Like `async-exec`, but blocks current thread until execution of the
+  body has been finished. Returns the value returned by body."
+  [& body]
+  `(let [res# (atom nil)]
+     (.syncExec (Display/getDefault)
+                (reify Runnable
+                  (run [this#] (reset! res# (do ~@body)))))
+     @res#)) 
+
+
+(defn init-widget!
+  "Initializes the widget and all its children."
+  [widget] 
+  (-init! widget)
+  (doseq [child (-children widget)]
+    (with-parent widget (init-widget! child))))
+
+(defmacro defgui
+  "TODO: doc"
+  ([name args widgets]
+     `(defgui ~name nil ~args ~widgets))
+  ([name doc-string args widgets]
+     `(defn ~name {:doc ~doc-string ::gui true}
+        [~@args]
+        (fn [] (init-widget! ~widgets)))))
 
 
 (defn dispose-if-not [this]
@@ -31,117 +100,24 @@
 (def ^{:dynamic true :doc "TODO: doc"} *display*)
 
 (defmacro with-display
-  "Evaluates body in the try block, with the *display* bound to the given
-   display, then calls .dispose on it."
+  "Evaluates body in the try block, with *display* bound to the given
+   value, then calls .dispose on it."
   [display & body]
   `(binding [*display* ~display]
      (try ~@body (finally (dispose-if-not *display*)))))
 
-(defmacro with-new-display
-  "Same as (with-display (Display.) ...)"
-  [& body]
-  `(with-display (Display.) ~@body))
-
-
-(def ^{:dynamic true :doc "TODO: doc"} *parent*)
-
-(defmacro with-parent
-  "Evaluates body with the *parent* bound to the given widget."
-  [widget & body]
-  `(binding [*parent* ~widget] ~@body))
-
-
-(defn add-listener
-  "Adds a Listener on the event to the given widget. Returns widget.
-  f must be a function of 1 arg (the Event object)"
-  ([widget event f]
-     (let [event (if (keyword? event)
-                   (get events event)
-                   event)]
-       (doto (.widget widget)
-         (.addListener event (reify Listener
-                               (handleEvent [this e]
-                                 (f e)))))))
-  ([widget event f & events+functions]
-     (doseq [[e f] (concat [event f] events+functions)]
-       (add-listener widget e f))))
-
-(defmacro deflistener
-  "Adds a listener to the given widget. Event must be one of SWT event
-  constants, or corresponding keyword (e.g. SWT/MouseUp
-  <=> :mouse-up). Args are binding vector, which must contain 1 item -
-  the event object.
-  See also: sync-exec, async-exec."
-  [widget event args & body]
-  (assert (= (count args) 1) "Arguments vector must contain exactly 1 item")
-  `(alter-meta! (var ~widget) update-in [::listeners] conj
-                (delay (add-listener ~widget ~event
-                         (fn [~@args] ~@body)))))
-
-
-(defmacro async-exec
-  "Asyncronously executes body (which presumably updates UI).
-   Returns the value returned by the body. Use it when you want
-   to have access to the SWT widgets from non-UI thread."
-  [& body]
-  `(let [res# (atom nil)]
-     (.asyncExec (Display/getDefault)
-                 (reify Runnable
-                   (run [this#] (reset! res# (do ~@body)))))
-     @res#))
-
-(defmacro sync-exec
-  "Like async-exec, but blocks the thread until execution of the function
-   has been finished."
-  [& body]
-  `(let [res# (atom nil)]
-     (.syncExec (Display/getDefault)
-                (reify Runnable
-                  (run [this#] (reset! res# (do ~@body)))))
-     @res#))
-
-
-(defn open!
-  "Shows the given shell/dialog on the screen."
-  [this]
-  (-> this .widget .open))
-
-;; FIXME: rework
-;; (defn create!
-;;   "Given a gui, initializes it, opens the root widget (assuming it's a
-;;   shell and has name defined) and starts a service loop. You should
-;;   call it only once to start the main shell of your application.
-;;   Example: (with-new-display (init! my-gui) (create! my-gui))"
-;;   [gui]
-;;   (let [shell (-> gui root .widget)]
-;;     (try
-;;       (.open shell)
-;;       (while (not (.isDisposed shell))
-;;         (when-not (.readAndDispatch *display*)
-;;           (.sleep *display*)))
-;;       (finally
-;;        (dispose-if-not shell)))))
-
-
-;;; defgui --------------------------------------------------------------------- 
-
-(defn init-widget
-  "Creates and initializes the widget and all its children. Returns widget."
-  [[root & children :as widgets]]
-  (letfn [(init-widget-children [[parent & children]]
-            (-init! parent)
-            (doseq [child children]
-              (with-parent parent
-                (init-widget-children child))))]
-    (init-widget-children widgets)))
-
-(defmacro defgui
-  ([name args widgets]
-     `(defgui ~name nil ~args ~widgets))
-  ([name doc-string args widgets]
-     `(defn ~name {:doc ~doc-string ::gui true}
-        [~@args]
-        (init-widget ~widgets))))
+(defn run!
+  "TODO: doc"
+  [gui]
+  (with-display (Display.)
+    (let [shell (-swt-object (with-parent *display* (gui)))]
+      (try
+        (.open shell)
+        (while (not (.isDisposed shell))
+          (when-not (.readAndDispatch *display*)
+            (.sleep *display*)))
+        (finally
+         (dispose-if-not shell))))))
 
 
 ;;; Misc -----------------------------------------------------------------------
