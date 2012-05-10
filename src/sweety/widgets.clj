@@ -1,16 +1,20 @@
 (ns sweety.widgets
-  (:use [sweety.defwidget :only [defwidget]])
-  (:import (org.eclipse.swt.graphics Point Rectangle)))
-
-;;; Widgets declaration -------------------------------------------------------- 
+  (:use [sweety.defwidget :only [defwidget defhooks]])
+  (:import (org.eclipse.swt.widgets Control)
+           (org.eclipse.swt.graphics Point Rectangle)))
 
 (letfn [(vec->pt [[x y]] (Point. x y))
-        (vec->rect [[x y w h]] (Rectangle. x y w h))]
+        (pt->vec [p] [(.x p) (.y p)])
+        (vec->rect [[x y w h]] (Rectangle. x y w h))
+        (rect->vec [r] [(.x r) (.y r) (.width r) (.height r)])]
 
-  (def ^:private common-hooks
-    {'setSize vec->pt
-     'setLocation vec->pt
-     'setBounds vec->rect}))
+  (defhooks Control
+    (Size vec->pt pt->vec)
+    (Location vec->pt pt->vec)
+    (Bounds vec->rect rect->vec)))
+
+
+;;; Widgets declaration --------------------------------------------------------
 
 (defwidget org.eclipse.swt.browser.Browser)
 
