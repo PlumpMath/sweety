@@ -53,7 +53,7 @@
     (get-children [this#] ~'children)
     (add-init-fn! [this# f#] (swap! ~'init-fns conj f#))
     (init! [this#] (doseq [f# (deref ~'init-fns)]
-                      (f# this#)))])
+                     (f# this#)))])
 
 (defn keyword+method-pairs [gen-method syms]
   (mapcat (juxt method->keyword gen-method) syms))
@@ -125,7 +125,7 @@
 (defmacro make-widget
   [class {:keys [swt-object init-fns id children meta validator watchers]
           :or {swt-object `(atom nil)
-               init-fns `(atom ())
+               init-fns `(atom [])
                meta `(atom {})
                watchers `(atom {})}}]
   (list 'new class swt-object init-fns id children meta validator watchers))

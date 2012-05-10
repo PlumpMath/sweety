@@ -1,5 +1,6 @@
 (ns sweety.core
-  (:use [sweety.defwidget :only [with-parent get-swt-object init! get-children]]
+  (:use [sweety.defwidget :only [with-parent init! add-init-fn!
+                                 get-swt-object get-id get-children]]
         [sweety.constants :only [events]])
   (:import (org.eclipse.swt.graphics Color)
            (org.eclipse.swt.widgets Listener Display)))
@@ -43,16 +44,17 @@
 (defmacro deflistener
   "Defines a listener for the widget named by `id`.
   `event` must be an SWT event constant or corresponding
-  keyword (e.g. SWT/MouseUp <=> :mouse-up). `args` is a vector which
-  must contain one symbol to which the Event object will be bound in
+  keyword (e.g. SWT/MouseUp <=> :mouse-up). `args` must be a vector
+  containing one symbol to which the Event object will be bound in
   `body`. The listener will be added right after initialization of the
   widget (refer to the `defgui` doc for details about widget
   initialization process).
   See also: add-listener!, sync-exec, async-exec."
   [id event args & body]
   {:pre [(= (count args) 1)]}
-  ;; TODO: write
-  )
+  `(add-init-fn! (by-id ~id)
+                 (fn [widget#]
+                   (add-listener! widget# ~event (fn [~@args] ~@body)))))
 
 
 (defmacro async-exec
@@ -73,8 +75,20 @@
      (.syncExec (Display/getDefault)
                 (reify Runnable
                   (run [this#] (reset! res# (do ~@body)))))
-     @res#)) 
+     @res#))
 
+
+(def widgets-by (atom {:id {} :class {}}))
+
+(defn by-id
+  "Returns a widget with the given id."
+  [id]
+  (get (@widgets-by :id) id))
+
+(defn add-ids! [widget]
+  (swap! widgets-by assoc-in [:id (get-id widget)] widget)
+  (doseq [child (get-children widget)]
+    (add-ids! child)))
 
 (defn init-widgets!
   "Initializes the widget and all its children. Returns widget."
@@ -89,9 +103,11 @@
   ([name args widgets]
      `(defgui ~name nil ~args ~widgets))
   ([name doc-string args widgets]
-     `(defn ~name {:doc ~doc-string ::gui true}
-        [~@args]
-        (fn [] (init-widgets! ~widgets)))))
+     `(let [widgets# ~widgets]
+        (add-ids! widgets#)
+        (defn ~name {:doc ~doc-string ::gui true}
+          [~@args]
+          (fn [] (init-widgets! widgets#))))))
 
 
 (defn dispose-if-not [this]
