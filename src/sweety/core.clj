@@ -41,6 +41,8 @@
      (doseq [[e f] (concat [event f] events+functions)]
        (add-listener! widget e f))))
 
+(declare add-pre-run-hook!)
+
 (defmacro deflistener
   "Defines a listener for the widget named by `id`.
   `event` must be an SWT event constant or corresponding
@@ -52,9 +54,8 @@
   See also: add-listener!, sync-exec, async-exec."
   [id event args & body]
   {:pre [(= (count args) 1)]}
-  `(add-init-fn! (by-id ~id)
-                 (fn [widget#]
-                   (add-listener! widget# ~event (fn [~@args] ~@body)))))
+  `(add-pre-run-hook!
+    (fn [] (add-listener! (by-id ~id) ~event (fn [~@args] ~@body)))))
 
 
 (defmacro async-exec
@@ -103,11 +104,11 @@
   ([name args widgets]
      `(defgui ~name nil ~args ~widgets))
   ([name doc-string args widgets]
-     `(let [widgets# ~widgets]
-        (add-ids! widgets#)
-        (defn ~name {:doc ~doc-string ::gui true}
-          [~@args]
-          (fn [] (init-widgets! widgets#))))))
+     `(defn ~name {:doc ~doc-string ::gui true}
+        [~@args]
+        (fn [] (let [widgets# ~widgets]
+                 (add-ids! widgets#)
+                 (init-widgets! widgets#))))))
 
 
 (defn dispose-if-not [this]
@@ -123,11 +124,20 @@
   `(binding [*display* ~display]
      (try ~@body (finally (dispose-if-not *display*)))))
 
+(def pre-run-hooks (atom []))
+
+(defn add-pre-run-hook! [f]
+  (swap! pre-run-hooks conj f))
+
+(defn call-pre-run-hooks []
+  (doseq [f @pre-run-hooks] (f)))
+
 (defn run!
   "TODO: doc"
   [gui]
   (with-display (Display.)
-    (let [shell (get-swt-object (with-parent *display* (gui)))]
+    (let [shell (get-swt-object (with-parent *display* (gui)))] 
+      (call-pre-run-hooks)
       (try
         (.open shell)
         (while (not (.isDisposed shell))
