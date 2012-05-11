@@ -134,28 +134,37 @@
   (not= nil (get-swt-object widget)))
 
 
-;; TODO: it's ugly, refactor somehow
-(defn method-call? [form]
-  (if (list? form)
-    (let [[sym] form]
-      (and (symbol? sym) (= \. (first (str sym)))))
-    false))
+(defn name-keyword? [x]
+  (and (keyword? x)
+       (or (boolean (namespace x))
+           (.startsWith (name x) "#"))))
 
-;; FIXME: rewrite
-;; TODO: return opts too
-(defn args-for-defwidget [[maybe-name :as more]]
-  (let [[name [maybe-init :as more]] (if (keyword? maybe-name)
-                                       [maybe-name (rest more)]
-                                       [nil more])
-        [init more] (if (set? maybe-init)
-                      [maybe-init (rest more)]
-                      [#{} more])
-        [methods more] (split-with (every-pred list? method-call?)
-                                   more)
-        [keys+vals children] (map (partial apply concat)
-                                  (split-with (comp keyword? first)
-                                              (partition-all 2 more)))]
-    [name init methods keys+vals children]))
+(defn method-call? [form]
+  (and (list? form)
+       (let [[x] form]
+         (or (= '. x)
+             (and (symbol? x)
+                  (.startsWith (name x) "."))))))
+
+(defn args-for-defwidget
+  "Given a coll [name? style? opts? methods* properties* children*],
+  returns a corresponding map."
+  [[maybe-name :as more]]
+  (let [[name [maybe-style :as more]] (if (name-keyword? maybe-name)
+                                        [maybe-name (rest more)]
+                                        [nil more])
+        [style [maybe-opts :as more]] (if (set? maybe-style)
+                                        [maybe-style (rest more)]
+                                        [#{} more])
+        [opts more] (if (map? maybe-opts)
+                      [maybe-opts (rest more)]
+                      [{} more])
+        [methods more] (split-with method-call? more)
+        [properties children] (map (partial apply concat)
+                                   (split-with (comp keyword? first)
+                                               (partition-all 2 more)))]
+    {:name name :style style :opts opts
+     :methods methods :properties properties :children children}))
 
 (defn parse-name-keyword [kw]
   (let [[id & classes] (split (name kw) #"#")]
@@ -189,11 +198,14 @@
   `(let [type# (deftype-for-widget ~type-name ~class)]
      (defmacro ~macro-name ~attr-map
        [& args#]
-       (let [[name# style# methods# keys+vals# children#] (args-for-defwidget args#)
-             [id# classes#] (parse-name-keyword name#) ;; TODO: classes
-             opts# {} ; XXX: will be returned from args-for-defwidget
-             opts# (merge opts# {:id id# :children (vec children#)})
-             init# (gen-init-fn ~class style# methods# keys+vals#)]
+       (let [args# (args-for-defwidget args#)
+             [id# classes#] (-> args# :name parse-name-keyword) ;; TODO: classes
+             opts# (merge (:opts args#)
+                          {:id id#, :children (-> args# :children vec)})
+             init# (gen-init-fn ~class
+                                (:style args#)
+                                (:methods args#)
+                                (:properties args#))]
          `(doto (make-widget ~type# ~opts#)
             (add-init-fn! ~init#))))))
 
