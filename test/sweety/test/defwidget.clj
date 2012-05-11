@@ -1,25 +1,11 @@
 (ns sweety.test.defwidget
   (:use sweety.defwidget :reload)
   (:use midje.sweet)
-  (:import (java.util Date)
-           (org.eclipse.swt SWT)))
+  (:import (org.eclipse.swt SWT)))
 
 (fact "keyword+method-pairs"
   (keyword+method-pairs identity '[setFoo getBar])
-  => '[:foo setFoo :bar getBar])
-
-
-(comment
-  (deftype-for-widget ADate Date
-    {:deref (.getDate widget)})
-
-  (fact "the Widget protocol and keyword lookup"
-    (let [date (ADate. (Date.))]
-      (-assoc! date :hours 12)
-      (-> date .widget .getHours) => 12
-      (:hours date) => 12
-      @date => (-> date .widget .getDate))))
-
+  => '[:foo setFoo :bar getBar]) 
 
 (fact "name-keyword?"
   (name-keyword? ::name) => true
@@ -72,8 +58,7 @@
 
   (args-for-defwidget '[::name :key val])
   => {:name ::name :style #{} :opts {}
-      :methods () :properties '[:key val] :children ()})
-
+      :methods () :properties '[:key val] :children ()}) 
 
 (fact "compute-style"
   (compute-style #{}) => SWT/NULL
