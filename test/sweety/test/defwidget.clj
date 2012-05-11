@@ -83,6 +83,7 @@
 (tabular "parse-name-keyword"
   (fact (parse-name-keyword input) => [id classes])
   input      id     classes
+  nil        nil    []
   ::foo      ::foo  []
   ::foo#bar  ::foo  [:bar]
   :#bar      nil    [:bar]

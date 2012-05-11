@@ -167,7 +167,7 @@
      :methods methods :properties properties :children children}))
 
 (defn parse-name-keyword [kw]
-  (let [[id & classes] (split (name kw) #"#")]
+  (let [[id & classes] (-> (or kw "") name (split #"#"))]
     [(when (seq id) (keyword (namespace kw) id))
      (map keyword classes)]))
 
