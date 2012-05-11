@@ -1,4 +1,5 @@
 (ns sweety.widgets
+  (:refer-clojure :exclude [list]) 
   (:use [sweety.defwidget :only [defwidget defhooks]])
   (:import (org.eclipse.swt.widgets Control)
            (org.eclipse.swt.graphics Point Rectangle)))
