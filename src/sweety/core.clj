@@ -15,7 +15,8 @@
   (get (@widgets-by :id) id))
 
 (defn add-ids! [widget]
-  (swap! widgets-by assoc-in [:id (get-id widget)] widget)
+  (when-let [id (get-id widget)]
+    (swap! widgets-by assoc-in [:id id] widget))
   (doseq [child (get-children widget)]
     (add-ids! child)))
 
@@ -124,7 +125,7 @@
   `(add-post-init-hook!
     (fn []
       (doto (by-id ~id)
-        (remove-listeners! ~event) ; this allows to recompile deflistener calls 
+        (remove-listeners! ~event) ; this allows to recompile deflistener calls
         (add-listener! ~event (fn [~@args] ~@body))))))
 
 
